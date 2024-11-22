@@ -15,13 +15,31 @@ def game_loop(args, doc):
         pygame.font.init()
     world = None
     original_settings = None
-
+    role_name = "v1" # ego_vehicle Npc3129 v1
     try:
         client = carla.Client(args.host, args.port)
         client.set_timeout(20.0)
+        # xodr_path = "/home/sora/autoware_carla_launch/external/zenoh_carla_bridge/carla_agent/simulation/ARG_Carcarana-1_3_I-1-1.xodr"
+        # with open(xodr_path, "r") as od_file:
+        #     xodr_data = od_file.read()
+        # #sim_world = client.load_world(config.SIM_WORLD)
+        sim_world = client.get_world()
 
-        sim_world = client.load_world(config.SIM_WORLD)
-        # sim_world = client.get_world()
+        vehicles = sim_world.get_actors()
+        ego_vehicle = None
+        for vehicle in vehicles:
+            print(vehicle.attributes.get("role_name"), flush=True)
+            if vehicle.attributes.get("role_name") == role_name:
+                ego_vehicle = vehicle
+                break
+        if ego_vehicle is None:
+            print("Error: no vehicle found with role_name ego_vehicle")
+            return 
+        
+        sim_world = ego_vehicle.get_world()
+
+        #sim_world = client.generate_opendrive_world(xodr_data)
+        print(sim_world, flush=True)
         if args.sync:
             original_settings = sim_world.get_settings()
             settings = sim_world.get_settings()
@@ -42,8 +60,10 @@ def game_loop(args, doc):
             pygame.display.flip()
 
         hud = HUD(args.width, args.height, doc)
-        world = World(sim_world, hud, args)
-        if args.pygame:
+        world = World(sim_world, hud, args, ego_vehicle)
+        controller = None
+        if args.pygame and args.autopilot:
+            
             controller = KeyboardControl(world, args.autopilot)
 
         if args.sync:
@@ -61,7 +81,7 @@ def game_loop(args, doc):
                 time.sleep(0.1)
             if args.pygame:
                 clock.tick_busy_loop(60)
-                if controller.parse_events(client, world, clock, args.sync):
+                if controller and controller.parse_events(client, world, clock, args.sync):
                     return
                 world.tick(clock)
                 world.render(display)
