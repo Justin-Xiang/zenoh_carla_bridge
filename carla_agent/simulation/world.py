@@ -17,7 +17,7 @@ from .utils import find_weather_presets, get_actor_blueprints, get_actor_display
 
 
 class World(object):
-    def __init__(self, carla_world, hud, args, ego_vehicle):
+    def __init__(self, carla_world, hud, args):
         self.world = carla_world
         self.sync = args.sync
         self.actor_role_name = args.rolename
@@ -37,7 +37,7 @@ class World(object):
             print('  Make sure it exists, has the same name of your town, and is correct.')
             sys.exit(1)
         self.hud = hud
-        self.player = ego_vehicle
+        self.player = None
         self.collision_sensor = None
         self.lane_invasion_sensor = None
         self.gnss_sensor = None
@@ -79,43 +79,65 @@ class World(object):
         # Keep same camera config if the camera manager exists.
         cam_index = self.camera_manager.index if self.camera_manager is not None else 0
         cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
+        # Get a random blueprint.
+        blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
+        blueprint.set_attribute('role_name', 'autoware_' + self.actor_role_name)
+        if blueprint.has_attribute('color'):
+            color = random.choice(blueprint.get_attribute('color').recommended_values)
+            blueprint.set_attribute('color', color)
+        if blueprint.has_attribute('driver_id'):
+            driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
+            blueprint.set_attribute('driver_id', driver_id)
+        if blueprint.has_attribute('is_invincible'):
+            blueprint.set_attribute('is_invincible', 'true')
+        # set the max speed
+        if blueprint.has_attribute('speed'):
+            self.player_max_speed = float(blueprint.get_attribute('speed').recommended_values[1])
+            self.player_max_speed_fast = float(blueprint.get_attribute('speed').recommended_values[2])
 
-        # Only spawn a new player if ego_vehicle wasn't provided
-        if self.player is None:
-            # Get a random blueprint
-            blueprint = random.choice(get_actor_blueprints(self.world, self._actor_filter, self._actor_generation))
-            blueprint.set_attribute('role_name', 'autoware_' + self.actor_role_name)
-            if blueprint.has_attribute('color'):
-                color = random.choice(blueprint.get_attribute('color').recommended_values)
-                blueprint.set_attribute('color', color)
-            if blueprint.has_attribute('driver_id'):
-                driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
-                blueprint.set_attribute('driver_id', driver_id)
-            if blueprint.has_attribute('is_invincible'):
-                blueprint.set_attribute('is_invincible', 'true')
-
-            # Set the max speed
-            if blueprint.has_attribute('speed'):
-                self.player_max_speed = float(blueprint.get_attribute('speed').recommended_values[1])
-                self.player_max_speed_fast = float(blueprint.get_attribute('speed').recommended_values[2])
-
-            # Spawn the player if it does not exist
+        # Spawn the player.
+        vehicles = self.world.get_actors()
+        for vehicle in vehicles:
+            print(vehicle, flush=True)
+            print(vehicle.attributes, flush=True)
+            print(type(vehicle), flush=True)
+            
+            if vehicle.attributes:
+                if vehicle.attributes.get("role_name") == self.actor_role_name:
+                    self.player = vehicle
+                    break
+        spawn_point = self.player.get_transform()
+        spawn_point.location.z += 2.0
+        spawn_point.rotation.roll = 0.0
+        spawn_point.rotation.pitch = 0.0
+        self.player.destroy()
+        self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+        self.show_vehicle_telemetry = False
+        self.modify_vehicle_physics(self.player)
+        # if self.player is not None:
+        #     spawn_point = self.player.get_transform()
+        #     spawn_point.location.z += 2.0
+        #     spawn_point.rotation.roll = 0.0
+        #     spawn_point.rotation.pitch = 0.0
+        #     self.destroy()
+        #     self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+        #     self.show_vehicle_telemetry = False
+        #     self.modify_vehicle_physics(self.player)
+        while self.player is None:
             if not self.map.get_spawn_points():
                 print('There are no spawn points available in your map/town.')
                 print('Please add some Vehicle Spawn Point to your UE4 scene.')
                 sys.exit(1)
-        
             spawn_points = self.map.get_spawn_points()
             if self.position is None:
                 spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
             else:
                 spawn_point = self.position
-
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            print(type(self.player), flush=True) # 'carla.libcarla.Vehicle'
             self.show_vehicle_telemetry = False
             self.modify_vehicle_physics(self.player)
-
-        # Attach sensors to the player (whether it is an existing or newly created player)
+        # Set up the sensors.
         self.collision_sensor = CollisionSensor(self.player, self.hud)
         self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
         self.gnss_sensor = GnssSensor(self.player, sensor_name='ublox')
@@ -132,8 +154,6 @@ class World(object):
             self.world.tick()
         else:
             self.world.wait_for_tick()
-
-        
 
     def next_weather(self, reverse=False):
         self._weather_index += -1 if reverse else 1
